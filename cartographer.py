@@ -120,9 +120,16 @@ def main():
         "-v", "--verbose", action="store_true",
         help="show failed lookups"
     )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true",
+        help="minimal output, only print subdomain,ip lines (for piping)"
+    )
     args = parser.parse_args()
 
-    print_banner()
+    quiet = args.quiet
+
+    if not quiet:
+        print_banner()
 
     try:
         prefixes = read_wordlist(args.wordlist)
@@ -131,38 +138,46 @@ def main():
         sys.exit(1)
 
     subdomains = [f"{prefix}.{args.domain}" for prefix in prefixes]
-    print(yellow(f"[*] Enumerating subdomains for {bold(args.domain)}"))
-    print(yellow(f"[*] Loaded {len(subdomains)} entries from {args.wordlist}"))
-    print(yellow(f"[*] Using {args.threads} threads"))
-    print()
+    if not quiet:
+        print(yellow(f"[*] Enumerating subdomains for {bold(args.domain)}"))
+        print(yellow(f"[*] Loaded {len(subdomains)} entries from {args.wordlist}"))
+        print(yellow(f"[*] Using {args.threads} threads"))
+        print()
 
     results = []
-    progress = ProgressBar(len(subdomains))
+    progress = ProgressBar(len(subdomains)) if not quiet else None
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
         futures = {executor.submit(resolve_subdomain, s): s for s in subdomains}
         for future in concurrent.futures.as_completed(futures):
-            progress.update()
+            if progress:
+                progress.update()
             result = future.result()
             sub = futures[future]
             if result:
                 subdomain, ip = result
-                if IS_TTY:
-                    sys.stdout.write("\r" + " " * 70 + "\r")
-                print(green(f"[+] {subdomain}") + f" -> {ip}")
+                if quiet:
+                    print(f"{subdomain},{ip}")
+                else:
+                    if IS_TTY:
+                        sys.stdout.write("\r" + " " * 70 + "\r")
+                    print(green(f"[+] {subdomain}") + f" -> {ip}")
                 results.append(result)
-            elif args.verbose:
+            elif args.verbose and not quiet:
                 if IS_TTY:
                     sys.stdout.write("\r" + " " * 70 + "\r")
                 print(red(f"[-] {sub}") + " - no resolution")
-    progress.finish()
+    if progress:
+        progress.finish()
 
-    print(yellow(f"\n[*] Found {len(results)} subdomain(s)"))
+    if not quiet:
+        print(yellow(f"\n[*] Found {len(results)} subdomain(s)"))
 
     if args.output and results:
         with open(args.output, "w") as f:
             for subdomain, ip in sorted(results):
                 f.write(f"{subdomain},{ip}\n")
-        print(yellow(f"[*] Results saved to {args.output}"))
+        if not quiet:
+            print(yellow(f"[*] Results saved to {args.output}"))
 
 
 if __name__ == "__main__":
