@@ -1,6 +1,7 @@
 import argparse
 import socket
 import sys
+import threading
 import concurrent.futures
 
 # --- ANSI colors ---
@@ -45,6 +46,35 @@ BANNER = r"""
 
 def print_banner():
     print(cyan(BANNER))
+
+
+# --- Progress bar ---
+
+IS_TTY = sys.stdout.isatty()
+
+
+class ProgressBar:
+    def __init__(self, total, width=30):
+        self.total = total
+        self.width = width
+        self.done = 0
+        self._lock = threading.Lock()
+
+    def update(self):
+        with self._lock:
+            self.done += 1
+            if not IS_TTY:
+                return
+            pct = self.done / self.total
+            filled = int(self.width * pct)
+            bar = "#" * filled + "-" * (self.width - filled)
+            sys.stdout.write(f"\r  [{bar}] {self.done}/{self.total} ({pct:.0%})")
+            sys.stdout.flush()
+
+    def finish(self):
+        if IS_TTY:
+            sys.stdout.write("\r" + " " * (self.width + 30) + "\r")
+            sys.stdout.flush()
 
 
 # --- Core logic ---
@@ -103,14 +133,19 @@ def main():
     print()
 
     results = []
+    progress = ProgressBar(len(subdomains))
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
         futures = {executor.submit(resolve_subdomain, s): s for s in subdomains}
         for future in concurrent.futures.as_completed(futures):
+            progress.update()
             result = future.result()
             if result:
                 subdomain, ip = result
+                if IS_TTY:
+                    sys.stdout.write("\r" + " " * 70 + "\r")
                 print(green(f"[+] {subdomain}") + f" -> {ip}")
                 results.append(result)
+    progress.finish()
 
     print(yellow(f"\n[*] Found {len(results)} subdomain(s)"))
 
