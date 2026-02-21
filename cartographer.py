@@ -1,4 +1,5 @@
 import argparse
+import json
 import random
 import re
 import socket
@@ -186,11 +187,15 @@ def main():
         "--delay", type=float, default=0,
         help="delay in seconds between lookups per thread (default: 0)"
     )
+    parser.add_argument(
+        "--json", action="store_true", dest="json_output",
+        help="output results as JSON"
+    )
     args = parser.parse_args()
 
     record_types = [r.strip().upper() for r in args.records.split(",")]
 
-    quiet = args.quiet
+    quiet = args.quiet or args.json_output
 
     if not quiet:
         print_banner()
@@ -231,7 +236,9 @@ def main():
                 for subdomain, rtype, value in records:
                     if wildcard_ip and rtype == "A" and value == wildcard_ip:
                         continue
-                    if quiet:
+                    if args.json_output:
+                        pass  # collect silently, dump at end
+                    elif quiet:
                         print(f"{subdomain},{rtype},{value}")
                     else:
                         if IS_TTY:
@@ -263,23 +270,41 @@ def main():
                     status, title = probe
                     http_results[sub] = {"status": status, "title": title}
                     title_str = f" ({title})" if title else ""
-                    if quiet:
+                    if args.json_output:
+                        pass
+                    elif quiet:
                         print(f"{sub},HTTP,{status}{title_str}")
                     else:
                         if IS_TTY:
                             sys.stdout.write("\r" + " " * 70 + "\r")
                         print(green(f"[+] {sub}") + f" -> {status}{title_str}")
 
-    if args.output and results:
-        with open(args.output, "w") as f:
-            for subdomain, rtype, value in sorted(results):
-                extra = ""
-                if subdomain in http_results:
-                    h = http_results[subdomain]
-                    extra = f",{h['status']},{h['title']}"
-                f.write(f"{subdomain},{rtype},{value}{extra}\n")
-        if not quiet:
-            print(yellow(f"[*] Results saved to {args.output}"))
+    # Build structured output
+    if args.json_output or args.output:
+        json_data = []
+        for subdomain, rtype, value in sorted(results):
+            entry = {"subdomain": subdomain, "type": rtype, "value": value}
+            if subdomain in http_results:
+                entry["http_status"] = http_results[subdomain]["status"]
+                entry["http_title"] = http_results[subdomain]["title"]
+            json_data.append(entry)
+
+        if args.json_output:
+            print(json.dumps(json_data, indent=2))
+
+        if args.output:
+            with open(args.output, "w") as f:
+                if args.json_output:
+                    json.dump(json_data, f, indent=2)
+                else:
+                    for subdomain, rtype, value in sorted(results):
+                        extra = ""
+                        if subdomain in http_results:
+                            h = http_results[subdomain]
+                            extra = f",{h['status']},{h['title']}"
+                        f.write(f"{subdomain},{rtype},{value}{extra}\n")
+            if not quiet:
+                print(yellow(f"[*] Results saved to {args.output}"))
 
 
 if __name__ == "__main__":
