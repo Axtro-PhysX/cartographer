@@ -6,7 +6,13 @@ import sys
 import threading
 import concurrent.futures
 
+import re
+
 import dns.resolver
+import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- ANSI colors ---
 
@@ -111,6 +117,26 @@ def detect_wildcard(domain):
         return None
 
 
+def probe_http(subdomain, timeout=3):
+    """Probe HTTP/HTTPS for a subdomain. Returns (status_code, title) or None."""
+    for scheme in ("https", "http"):
+        try:
+            resp = requests.get(
+                f"{scheme}://{subdomain}",
+                timeout=timeout,
+                allow_redirects=True,
+                verify=False,
+            )
+            title = ""
+            match = re.search(r"<title[^>]*>(.*?)</title>", resp.text[:4096], re.IGNORECASE | re.DOTALL)
+            if match:
+                title = match.group(1).strip()
+            return (resp.status_code, title)
+        except requests.RequestException:
+            continue
+    return None
+
+
 def read_wordlist(filepath):
     """Read subdomain prefixes from a wordlist file, one per line."""
     with open(filepath) as f:
@@ -149,6 +175,10 @@ def main():
     parser.add_argument(
         "-r", "--records", default="A",
         help="comma-separated DNS record types to query (default: A). e.g. A,AAAA,CNAME,MX"
+    )
+    parser.add_argument(
+        "--probe", action="store_true",
+        help="probe HTTP/HTTPS on discovered subdomains and show status code + title"
     )
     args = parser.parse_args()
 
@@ -212,10 +242,36 @@ def main():
     if not quiet:
         print(yellow(f"\n[*] Found {len(results)} record(s)"))
 
+    # HTTP probing
+    http_results = {}
+    if args.probe and results:
+        unique_subs = sorted(set(sub for sub, _, _ in results))
+        if not quiet:
+            print(yellow(f"\n[*] Probing HTTP/HTTPS on {len(unique_subs)} subdomain(s)..."))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
+            probe_futures = {executor.submit(probe_http, s): s for s in unique_subs}
+            for future in concurrent.futures.as_completed(probe_futures):
+                sub = probe_futures[future]
+                probe = future.result()
+                if probe:
+                    status, title = probe
+                    http_results[sub] = {"status": status, "title": title}
+                    title_str = f" ({title})" if title else ""
+                    if quiet:
+                        print(f"{sub},HTTP,{status}{title_str}")
+                    else:
+                        if IS_TTY:
+                            sys.stdout.write("\r" + " " * 70 + "\r")
+                        print(green(f"[+] {sub}") + f" -> {status}{title_str}")
+
     if args.output and results:
         with open(args.output, "w") as f:
             for subdomain, rtype, value in sorted(results):
-                f.write(f"{subdomain},{rtype},{value}\n")
+                extra = ""
+                if subdomain in http_results:
+                    h = http_results[subdomain]
+                    extra = f",{h['status']},{h['title']}"
+                f.write(f"{subdomain},{rtype},{value}{extra}\n")
         if not quiet:
             print(yellow(f"[*] Results saved to {args.output}"))
 
