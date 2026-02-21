@@ -7,7 +7,7 @@ No dependencies — standard library only.
 ## Usage
 
 ```
-python3 main.py <domain> [options]
+python3 cartographer.py <domain> [options]
 ```
 
 ### Options
@@ -21,7 +21,7 @@ python3 main.py <domain> [options]
 ### Examples
 
 ```
-python3 main.py example.com
-python3 main.py example.com -w custom_wordlist.txt -t 50
-python3 main.py example.com -o results.csv
+python3 cartographer.py example.com
+python3 cartographer.py example.com -w custom_wordlist.txt -t 50
+python3 cartographer.py example.com -o results.csv
 ```
