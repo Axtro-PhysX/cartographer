@@ -6,6 +6,8 @@ import sys
 import threading
 import concurrent.futures
 
+import dns.resolver
+
 # --- ANSI colors ---
 
 USE_COLOR = sys.stdout.isatty()
@@ -82,13 +84,21 @@ class ProgressBar:
 # --- Core logic ---
 
 
-def resolve_subdomain(subdomain):
-    """Attempt to resolve a subdomain via DNS. Returns (subdomain, ip) or None."""
-    try:
-        ip = socket.gethostbyname(subdomain)
-        return (subdomain, ip)
-    except socket.gaierror:
-        return None
+def resolve_subdomain(subdomain, record_types=("A",)):
+    """Resolve a subdomain for the given record types.
+
+    Returns a list of (subdomain, rtype, value) tuples, or an empty list.
+    """
+    results = []
+    for rtype in record_types:
+        try:
+            answers = dns.resolver.resolve(subdomain, rtype)
+            for rdata in answers:
+                results.append((subdomain, rtype, str(rdata)))
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
+                dns.resolver.NoNameservers, dns.resolver.LifetimeTimeout):
+            pass
+    return results
 
 
 def detect_wildcard(domain):
@@ -136,7 +146,13 @@ def main():
         "-q", "--quiet", action="store_true",
         help="minimal output, only print subdomain,ip lines (for piping)"
     )
+    parser.add_argument(
+        "-r", "--records", default="A",
+        help="comma-separated DNS record types to query (default: A). e.g. A,AAAA,CNAME,MX"
+    )
     args = parser.parse_args()
+
+    record_types = [r.strip().upper() for r in args.records.split(",")]
 
     quiet = args.quiet
 
@@ -154,6 +170,7 @@ def main():
         print(yellow(f"[*] Enumerating subdomains for {bold(args.domain)}"))
         print(yellow(f"[*] Loaded {len(subdomains)} entries from {args.wordlist}"))
         print(yellow(f"[*] Using {args.threads} threads"))
+        print(yellow(f"[*] Record types: {', '.join(record_types)}"))
 
     wildcard_ip = detect_wildcard(args.domain)
     if wildcard_ip and not quiet:
@@ -165,23 +182,26 @@ def main():
     results = []
     progress = ProgressBar(len(subdomains)) if not quiet else None
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
-        futures = {executor.submit(resolve_subdomain, s): s for s in subdomains}
+        futures = {
+            executor.submit(resolve_subdomain, s, record_types): s
+            for s in subdomains
+        }
         for future in concurrent.futures.as_completed(futures):
             if progress:
                 progress.update()
-            result = future.result()
+            records = future.result()
             sub = futures[future]
-            if result:
-                subdomain, ip = result
-                if wildcard_ip and ip == wildcard_ip:
-                    continue
-                if quiet:
-                    print(f"{subdomain},{ip}")
-                else:
-                    if IS_TTY:
-                        sys.stdout.write("\r" + " " * 70 + "\r")
-                    print(green(f"[+] {subdomain}") + f" -> {ip}")
-                results.append(result)
+            if records:
+                for subdomain, rtype, value in records:
+                    if wildcard_ip and rtype == "A" and value == wildcard_ip:
+                        continue
+                    if quiet:
+                        print(f"{subdomain},{rtype},{value}")
+                    else:
+                        if IS_TTY:
+                            sys.stdout.write("\r" + " " * 70 + "\r")
+                        print(green(f"[+] {subdomain}") + f" {rtype} -> {value}")
+                    results.append((subdomain, rtype, value))
             elif args.verbose and not quiet:
                 if IS_TTY:
                     sys.stdout.write("\r" + " " * 70 + "\r")
@@ -190,12 +210,12 @@ def main():
         progress.finish()
 
     if not quiet:
-        print(yellow(f"\n[*] Found {len(results)} subdomain(s)"))
+        print(yellow(f"\n[*] Found {len(results)} record(s)"))
 
     if args.output and results:
         with open(args.output, "w") as f:
-            for subdomain, ip in sorted(results):
-                f.write(f"{subdomain},{ip}\n")
+            for subdomain, rtype, value in sorted(results):
+                f.write(f"{subdomain},{rtype},{value}\n")
         if not quiet:
             print(yellow(f"[*] Results saved to {args.output}"))
 
