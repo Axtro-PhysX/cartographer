@@ -1,12 +1,12 @@
 import argparse
 import random
+import re
 import socket
 import string
 import sys
+import time
 import threading
 import concurrent.futures
-
-import re
 
 import dns.resolver
 import requests
@@ -90,11 +90,13 @@ class ProgressBar:
 # --- Core logic ---
 
 
-def resolve_subdomain(subdomain, record_types=("A",)):
+def resolve_subdomain(subdomain, record_types=("A",), delay=0):
     """Resolve a subdomain for the given record types.
 
     Returns a list of (subdomain, rtype, value) tuples, or an empty list.
     """
+    if delay > 0:
+        time.sleep(delay)
     results = []
     for rtype in record_types:
         try:
@@ -180,6 +182,10 @@ def main():
         "--probe", action="store_true",
         help="probe HTTP/HTTPS on discovered subdomains and show status code + title"
     )
+    parser.add_argument(
+        "--delay", type=float, default=0,
+        help="delay in seconds between lookups per thread (default: 0)"
+    )
     args = parser.parse_args()
 
     record_types = [r.strip().upper() for r in args.records.split(",")]
@@ -213,7 +219,7 @@ def main():
     progress = ProgressBar(len(subdomains)) if not quiet else None
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
         futures = {
-            executor.submit(resolve_subdomain, s, record_types): s
+            executor.submit(resolve_subdomain, s, record_types, args.delay): s
             for s in subdomains
         }
         for future in concurrent.futures.as_completed(futures):
