@@ -3,6 +3,52 @@ import socket
 import sys
 import concurrent.futures
 
+# --- ANSI colors ---
+
+USE_COLOR = sys.stdout.isatty()
+
+
+def _c(code, text):
+    if USE_COLOR:
+        return f"\033[{code}m{text}\033[0m"
+    return text
+
+
+def green(text):
+    return _c("32", text)
+
+
+def red(text):
+    return _c("31", text)
+
+
+def yellow(text):
+    return _c("33", text)
+
+
+def cyan(text):
+    return _c("36", text)
+
+
+def bold(text):
+    return _c("1", text)
+
+
+BANNER = r"""
+                 __                                 __
+  _______ ______/ /____  ____  ________ ____  ___  / /  ___ ____
+ / __/ _ `/ __/ __/ __ \/ __ `/ __/ _ `/ _ \/ _ \/ _ \/ -_) __/
+ \__/\_,_/_/  \__/\____/\_, /_/  \_,_/ .__/\___/_//_/\__/_/
+                       /___/        /_/
+"""
+
+
+def print_banner():
+    print(cyan(BANNER))
+
+
+# --- Core logic ---
+
 
 def resolve_subdomain(subdomain):
     """Attempt to resolve a subdomain via DNS. Returns (subdomain, ip) or None."""
@@ -42,16 +88,18 @@ def main():
     )
     args = parser.parse_args()
 
+    print_banner()
+
     try:
         prefixes = read_wordlist(args.wordlist)
     except FileNotFoundError:
-        print(f"error: wordlist not found: {args.wordlist}", file=sys.stderr)
+        print(red(f"[!] error: wordlist not found: {args.wordlist}"), file=sys.stderr)
         sys.exit(1)
 
     subdomains = [f"{prefix}.{args.domain}" for prefix in prefixes]
-    print(f"[*] Enumerating subdomains for {args.domain}")
-    print(f"[*] Loaded {len(subdomains)} entries from {args.wordlist}")
-    print(f"[*] Using {args.threads} threads")
+    print(yellow(f"[*] Enumerating subdomains for {bold(args.domain)}"))
+    print(yellow(f"[*] Loaded {len(subdomains)} entries from {args.wordlist}"))
+    print(yellow(f"[*] Using {args.threads} threads"))
     print()
 
     results = []
@@ -61,16 +109,16 @@ def main():
             result = future.result()
             if result:
                 subdomain, ip = result
-                print(f"[+] {subdomain} -> {ip}")
+                print(green(f"[+] {subdomain}") + f" -> {ip}")
                 results.append(result)
 
-    print(f"\n[*] Found {len(results)} subdomain(s)")
+    print(yellow(f"\n[*] Found {len(results)} subdomain(s)"))
 
     if args.output and results:
         with open(args.output, "w") as f:
             for subdomain, ip in sorted(results):
                 f.write(f"{subdomain},{ip}\n")
-        print(f"[*] Results saved to {args.output}")
+        print(yellow(f"[*] Results saved to {args.output}"))
 
 
 if __name__ == "__main__":
