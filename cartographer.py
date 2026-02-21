@@ -116,6 +116,10 @@ def main():
     parser.add_argument(
         "-o", "--output", help="write results to a file"
     )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="show failed lookups"
+    )
     args = parser.parse_args()
 
     print_banner()
@@ -139,12 +143,17 @@ def main():
         for future in concurrent.futures.as_completed(futures):
             progress.update()
             result = future.result()
+            sub = futures[future]
             if result:
                 subdomain, ip = result
                 if IS_TTY:
                     sys.stdout.write("\r" + " " * 70 + "\r")
                 print(green(f"[+] {subdomain}") + f" -> {ip}")
                 results.append(result)
+            elif args.verbose:
+                if IS_TTY:
+                    sys.stdout.write("\r" + " " * 70 + "\r")
+                print(red(f"[-] {sub}") + " - no resolution")
     progress.finish()
 
     print(yellow(f"\n[*] Found {len(results)} subdomain(s)"))
