@@ -146,6 +146,48 @@ def read_wordlist(filepath):
         return [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
 
+def scan_domain(domain, prefixes, record_types, threads, delay, wildcard_ip,
+                quiet, verbose, json_output):
+    """Scan a domain with the given prefixes. Returns list of (subdomain, rtype, value)."""
+    subdomains = [f"{prefix}.{domain}" for prefix in prefixes]
+    if not quiet:
+        print(yellow(f"[*] Scanning {bold(domain)} ({len(subdomains)} entries)"))
+
+    results = []
+    progress = ProgressBar(len(subdomains)) if not quiet else None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+        futures = {
+            executor.submit(resolve_subdomain, s, record_types, delay): s
+            for s in subdomains
+        }
+        for future in concurrent.futures.as_completed(futures):
+            if progress:
+                progress.update()
+            records = future.result()
+            sub = futures[future]
+            if records:
+                for subdomain, rtype, value in records:
+                    if wildcard_ip and rtype == "A" and value == wildcard_ip:
+                        continue
+                    if json_output:
+                        pass
+                    elif quiet:
+                        print(f"{subdomain},{rtype},{value}")
+                    else:
+                        if IS_TTY:
+                            sys.stdout.write("\r" + " " * 70 + "\r")
+                        print(green(f"[+] {subdomain}") + f" {rtype} -> {value}")
+                    results.append((subdomain, rtype, value))
+            elif verbose and not quiet:
+                if IS_TTY:
+                    sys.stdout.write("\r" + " " * 70 + "\r")
+                print(red(f"[-] {sub}") + " - no resolution")
+    if progress:
+        progress.finish()
+
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="cartographer - simple subdomain enumeration tool"
@@ -191,6 +233,14 @@ def main():
         "--json", action="store_true", dest="json_output",
         help="output results as JSON"
     )
+    parser.add_argument(
+        "--recursive", action="store_true",
+        help="recursively enumerate subdomains of discovered subdomains"
+    )
+    parser.add_argument(
+        "--depth", type=int, default=1,
+        help="max recursion depth for --recursive (default: 1)"
+    )
     args = parser.parse_args()
 
     record_types = [r.strip().upper() for r in args.records.split(",")]
@@ -206,10 +256,9 @@ def main():
         print(red(f"[!] error: wordlist not found: {args.wordlist}"), file=sys.stderr)
         sys.exit(1)
 
-    subdomains = [f"{prefix}.{args.domain}" for prefix in prefixes]
     if not quiet:
         print(yellow(f"[*] Enumerating subdomains for {bold(args.domain)}"))
-        print(yellow(f"[*] Loaded {len(subdomains)} entries from {args.wordlist}"))
+        print(yellow(f"[*] Loaded {len(prefixes)} prefixes from {args.wordlist}"))
         print(yellow(f"[*] Using {args.threads} threads"))
         print(yellow(f"[*] Record types: {', '.join(record_types)}"))
 
@@ -220,40 +269,41 @@ def main():
     if not quiet:
         print()
 
-    results = []
-    progress = ProgressBar(len(subdomains)) if not quiet else None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
-        futures = {
-            executor.submit(resolve_subdomain, s, record_types, args.delay): s
-            for s in subdomains
-        }
-        for future in concurrent.futures.as_completed(futures):
-            if progress:
-                progress.update()
-            records = future.result()
-            sub = futures[future]
-            if records:
-                for subdomain, rtype, value in records:
-                    if wildcard_ip and rtype == "A" and value == wildcard_ip:
-                        continue
-                    if args.json_output:
-                        pass  # collect silently, dump at end
-                    elif quiet:
-                        print(f"{subdomain},{rtype},{value}")
-                    else:
-                        if IS_TTY:
-                            sys.stdout.write("\r" + " " * 70 + "\r")
-                        print(green(f"[+] {subdomain}") + f" {rtype} -> {value}")
-                    results.append((subdomain, rtype, value))
-            elif args.verbose and not quiet:
-                if IS_TTY:
-                    sys.stdout.write("\r" + " " * 70 + "\r")
-                print(red(f"[-] {sub}") + " - no resolution")
-    if progress:
-        progress.finish()
+    # Initial scan
+    all_results = scan_domain(
+        args.domain, prefixes, record_types, args.threads, args.delay,
+        wildcard_ip, quiet, args.verbose, args.json_output,
+    )
+
+    # Recursive enumeration
+    if args.recursive:
+        scanned = {args.domain}
+        current_depth = 0
+        new_domains = sorted(set(sub for sub, _, _ in all_results))
+
+        while current_depth < args.depth and new_domains:
+            next_domains = []
+            for domain in new_domains:
+                if domain in scanned:
+                    continue
+                scanned.add(domain)
+                if not quiet:
+                    print(yellow(f"\n[*] Recursive depth {current_depth + 1}: {domain}"))
+                sub_results = scan_domain(
+                    domain, prefixes, record_types, args.threads, args.delay,
+                    wildcard_ip, quiet, args.verbose, args.json_output,
+                )
+                all_results.extend(sub_results)
+                next_domains.extend(
+                    sub for sub, _, _ in sub_results if sub not in scanned
+                )
+            new_domains = sorted(set(next_domains))
+            current_depth += 1
+
+    results = all_results
 
     if not quiet:
-        print(yellow(f"\n[*] Found {len(results)} record(s)"))
+        print(yellow(f"\n[*] Found {len(results)} record(s) total"))
 
     # HTTP probing
     http_results = {}
