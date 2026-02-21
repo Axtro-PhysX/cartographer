@@ -1,5 +1,7 @@
 import argparse
+import random
 import socket
+import string
 import sys
 import threading
 import concurrent.futures
@@ -89,6 +91,16 @@ def resolve_subdomain(subdomain):
         return None
 
 
+def detect_wildcard(domain):
+    """Check if the domain has a wildcard DNS record. Returns the wildcard IP or None."""
+    rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))
+    try:
+        ip = socket.gethostbyname(f"{rand}.{domain}")
+        return ip
+    except socket.gaierror:
+        return None
+
+
 def read_wordlist(filepath):
     """Read subdomain prefixes from a wordlist file, one per line."""
     with open(filepath) as f:
@@ -142,6 +154,12 @@ def main():
         print(yellow(f"[*] Enumerating subdomains for {bold(args.domain)}"))
         print(yellow(f"[*] Loaded {len(subdomains)} entries from {args.wordlist}"))
         print(yellow(f"[*] Using {args.threads} threads"))
+
+    wildcard_ip = detect_wildcard(args.domain)
+    if wildcard_ip and not quiet:
+        print(yellow(f"[*] Wildcard detected: *.{args.domain} -> {wildcard_ip} (filtering false positives)"))
+
+    if not quiet:
         print()
 
     results = []
@@ -155,6 +173,8 @@ def main():
             sub = futures[future]
             if result:
                 subdomain, ip = result
+                if wildcard_ip and ip == wildcard_ip:
+                    continue
                 if quiet:
                     print(f"{subdomain},{ip}")
                 else:
